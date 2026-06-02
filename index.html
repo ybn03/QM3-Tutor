@@ -1,0 +1,550 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+<meta charset="UTF-8"/>
+<meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+<title>QM3 Tutor</title>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
+<script crossorigin src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+<script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+<script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=DM+Serif+Display&family=DM+Sans:wght@300;400;500;600&display=swap" rel="stylesheet">
+<style>
+*,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
+html,body,#root{height:100%;background:#0a0d14}
+code{background:rgba(79,156,249,0.15);padding:1px 5px;border-radius:4px;font-size:.88em;font-family:monospace}
+.mh2,.mh3,.mh4,.mh5{margin:.8em 0 .3em;color:#7dd3fc}
+.mh2{font-size:1.15em}.mh3{font-size:1.05em}.mh4,.mh5{font-size:.97em}
+.mp{display:block;margin-top:.5em}
+li{margin:2px 0 2px 1.2em;list-style:disc}
+li.ol{list-style:decimal}
+@keyframes bounce{0%,80%,100%{transform:translateY(0);opacity:.4}40%{transform:translateY(-5px);opacity:1}}
+@keyframes fadeIn{from{opacity:0;transform:translateY(8px)}to{opacity:1;transform:translateY(0)}}
+::-webkit-scrollbar{width:5px;height:5px}
+::-webkit-scrollbar-track{background:transparent}
+::-webkit-scrollbar-thumb{background:rgba(79,156,249,.25);border-radius:3px}
+select option{background:#1a1f2e;color:#e2e8f0}
+button:hover{opacity:.85}
+</style>
+</head>
+<body>
+<div id="root"></div>
+<script type="text/babel">
+const {useState,useRef,useEffect,useCallback}=React;
+
+pdfjsLib.GlobalWorkerOptions.workerSrc="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js";
+
+async function extractPdfText(file){
+  const ab=await file.arrayBuffer();
+  const pdf=await pdfjsLib.getDocument({data:ab}).promise;
+  let txt="";
+  for(let i=1;i<=pdf.numPages;i++){
+    const pg=await pdf.getPage(i);
+    const ct=await pg.getTextContent();
+    txt+=`\n[Seite ${i}]\n`+ct.items.map(x=>x.str).join(" ");
+  }
+  return txt.trim();
+}
+
+const STORAGE_KEY="qm3v2_sources",CHAT_KEY="qm3v2_chat";
+const SOURCE_TYPES=[
+  {value:"skript",label:"Skript",icon:"📘",color:"#4f9cf9"},
+  {value:"uebung",label:"Übungsaufgaben",icon:"✏️",color:"#a78bfa"},
+  {value:"altklausur",label:"Altklausur",icon:"📝",color:"#f59e0b"},
+  {value:"musterloesung",label:"Musterlösung",icon:"✅",color:"#34d399"},
+  {value:"sonstiges",label:"Sonstiges",icon:"📄",color:"#94a3b8"},
+];
+const DIFF_COLORS={leicht:"#34d399",mittel:"#f59e0b",schwer:"#f87171"};
+const SYSTEM_BASE=`Du bist ein präziser Tutor für das Universitätsmodul QM3.
+STRIKTE REGEL: Du antwortest AUSSCHLIESSLICH auf Basis der hochgeladenen Kursunterlagen des Studierenden.
+Erfinde KEINE zusätzlichen Inhalte, Themen oder Erklärungen, die nicht in den Quellen stehen.
+Wenn etwas nicht in den Quellen steht, sage klar: "Dazu finde ich in deinen Unterlagen keine Information."
+Antworte immer auf Deutsch. Formatiere Formeln und Rechenwege klar und strukturiert.
+Verweise bei Erklärungen explizit auf die jeweilige Quelle (z.B. "Laut Skript Seite X...").`;
+
+const persist=(k,v)=>{try{localStorage.setItem(k,JSON.stringify(v));}catch{}};
+const hydrate=k=>{try{const s=localStorage.getItem(k);return s?JSON.parse(s):null;}catch{return null;}};
+
+async function callClaude(system,messages,apiKey){
+  const res=await fetch("https://api.anthropic.com/v1/messages",{
+    method:"POST",
+    headers:{"Content-Type":"application/json","x-api-key":apiKey,"anthropic-version":"2023-06-01"},
+    body:JSON.stringify({model:"claude-sonnet-4-20250514",max_tokens:2048,system,messages}),
+  });
+  const d=await res.json();
+  if(d.error)throw new Error(d.error.message);
+  return d.content.map(b=>b.text||"").join("\n");
+}
+
+function md(text=""){
+  return text
+    .replace(/\*\*(.+?)\*\*/g,"<strong>$1</strong>")
+    .replace(/\*(.+?)\*/g,"<em>$1</em>")
+    .replace(/`([^`\n]+)`/g,"<code>$1</code>")
+    .replace(/^#### (.+)$/gm,'<h5 class="mh5">$1</h5>')
+    .replace(/^### (.+)$/gm,'<h4 class="mh4">$1</h4>')
+    .replace(/^## (.+)$/gm,'<h3 class="mh3">$1</h3>')
+    .replace(/^# (.+)$/gm,'<h2 class="mh2">$1</h2>')
+    .replace(/^[-•] (.+)$/gm,"<li>$1</li>")
+    .replace(/^(\d+)\. (.+)$/gm,'<li class="ol">$2</li>')
+    .replace(/\n{2,}/g,'</p><p class="mp">')
+    .replace(/\n/g,"<br/>");
+}
+
+function ApiKeySetup({onSave}){
+  const [val,setVal]=useState("");
+  return(
+    <div style={{minHeight:"100vh",background:"#0a0d14",display:"flex",alignItems:"center",justifyContent:"center",fontFamily:"'DM Sans',sans-serif"}}>
+      <div style={{background:"rgba(255,255,255,0.05)",border:"1px solid rgba(79,156,249,0.3)",borderRadius:20,padding:"40px 36px",maxWidth:440,width:"90%"}}>
+        <div style={{fontSize:44,textAlign:"center",marginBottom:16}}>🎓</div>
+        <h1 style={{fontFamily:"'DM Serif Display',serif",fontSize:26,color:"#f1f5f9",textAlign:"center",marginBottom:8}}>QM3 Tutor</h1>
+        <p style={{color:"#64748b",fontSize:13,textAlign:"center",marginBottom:28,lineHeight:1.7}}>
+          Gib deinen Anthropic API Key ein.<br/>Er wird nur lokal in deinem Browser gespeichert – nirgendwo sonst.
+        </p>
+        <label style={{fontSize:11,color:"#64748b",letterSpacing:.5,textTransform:"uppercase",fontWeight:600,display:"block",marginBottom:6}}>Anthropic API Key</label>
+        <input type="password" value={val} onChange={e=>setVal(e.target.value)}
+          onKeyDown={e=>e.key==="Enter"&&val.startsWith("sk-")&&onSave(val)}
+          placeholder="sk-ant-..."
+          style={{width:"100%",background:"rgba(255,255,255,0.06)",border:"1px solid rgba(79,156,249,0.3)",borderRadius:8,padding:"10px 12px",color:"#e2e8f0",fontSize:14,fontFamily:"inherit",outline:"none",marginBottom:16}}/>
+        <button onClick={()=>val.startsWith("sk-")&&onSave(val)}
+          style={{width:"100%",background:"linear-gradient(135deg,#1d4ed8,#3b82f6)",border:"none",borderRadius:8,padding:"11px",color:"#fff",fontSize:14,fontWeight:600,cursor:"pointer",fontFamily:"inherit"}}>
+          Speichern &amp; Starten →
+        </button>
+        <p style={{marginTop:18,fontSize:11,color:"#475569",textAlign:"center",lineHeight:1.7}}>
+          Key holen: <a href="https://console.anthropic.com" target="_blank" style={{color:"#4f9cf9"}}>console.anthropic.com</a><br/>
+          → API Keys → Create Key
+        </p>
+      </div>
+    </div>
+  );
+}
+
+function TypingDots(){
+  return(
+    <div style={{display:"flex",alignItems:"center",gap:4,padding:"10px 14px",background:"rgba(255,255,255,0.04)",borderRadius:12,width:"fit-content"}}>
+      {[0,1,2].map(i=><div key={i} style={{width:7,height:7,borderRadius:"50%",background:"#4f9cf9",animation:"bounce 1.2s infinite",animationDelay:`${i*.18}s`}}/>)}
+    </div>
+  );
+}
+
+function App(){
+  const [apiKey,setApiKey]=useState(()=>localStorage.getItem("qm3_apikey")||"");
+  const [sources,setSources]=useState([]);
+  const [view,setView]=useState("dashboard");
+  const [activeWidget,setActiveWidget]=useState("chat");
+  const [msgs,setMsgs]=useState([]);
+  const [input,setInput]=useState("");
+  const [chatBusy,setChatBusy]=useState(false);
+  const [exCfg,setExCfg]=useState({topic:"",difficulty:"mittel",type:"rechenaufgabe",count:1});
+  const [exResult,setExResult]=useState(null);
+  const [exBusy,setExBusy]=useState(false);
+  const [showSolution,setShowSolution]=useState(false);
+  const [examSrc,setExamSrc]=useState(null);
+  const [examMsgs,setExamMsgs]=useState([]);
+  const [examInput,setExamInput]=useState("");
+  const [examBusy,setExamBusy]=useState(false);
+  const [examStarted,setExamStarted]=useState(false);
+  const [uploading,setUploading]=useState(false);
+  const [uploadProg,setUploadProg]=useState("");
+  const fileRef=useRef(null);
+  const chatEnd=useRef(null);
+  const examEnd=useRef(null);
+
+  useEffect(()=>{
+    const s=hydrate(STORAGE_KEY),c=hydrate(CHAT_KEY);
+    if(s)setSources(s);
+    if(c)setMsgs(c);
+    else setMsgs([{role:"assistant",content:"Willkommen bei deinem **QM3-Tutor**! 🎓\n\nLade zuerst deine Unterlagen über **Quellen** hoch. Ich arbeite ausschließlich mit deinen Materialien – kein externes Wissen.\n\nSobald Quellen geladen sind:\n- **Konzepte** erklären lassen\n- **Übungsaufgaben** generieren\n- **Altklausuren** durcharbeiten"}]);
+  },[]);
+
+  useEffect(()=>{chatEnd.current?.scrollIntoView({behavior:"smooth"});},[msgs,chatBusy]);
+  useEffect(()=>{examEnd.current?.scrollIntoView({behavior:"smooth"});},[examMsgs,examBusy]);
+
+  const saveApiKey=k=>{localStorage.setItem("qm3_apikey",k);setApiKey(k);};
+
+  const buildSystem=useCallback((mode="chat")=>{
+    if(!sources.length)return SYSTEM_BASE;
+    const blocks=sources.map(s=>{
+      const label=SOURCE_TYPES.find(t=>t.value===s.type)?.label||s.type;
+      return `\n\n═══ QUELLE: ${label} | "${s.name}" ═══\n${(s.text||"").slice(0,12000)||"[Kein Textinhalt]"}`;
+    }).join("");
+    const note=mode==="exam"?"\n\nMODUS: Altklausur-Begleitung. Erkläre Lösungswege schrittweise.":
+      mode==="exercise"?"\n\nMODUS: Aufgabengenerator. NUR aus Unterlagen, keine neuen Themen.":"";
+    return SYSTEM_BASE+note+"\n\n"+blocks;
+  },[sources]);
+
+  const handleUpload=async files=>{
+    setUploading(true);
+    const newSrc=[];
+    for(const file of files){
+      setUploadProg(`Verarbeite: ${file.name}`);
+      let text="";
+      try{text=file.type==="application/pdf"?await extractPdfText(file):await file.text();}catch{}
+      newSrc.push({id:`${Date.now()}-${Math.random()}`,name:file.name,type:"sonstiges",size:file.size,text,added:new Date().toLocaleDateString("de-DE")});
+    }
+    const updated=[...sources,...newSrc];
+    setSources(updated);persist(STORAGE_KEY,updated);
+    setUploading(false);setUploadProg("");
+    if(fileRef.current)fileRef.current.value="";
+  };
+
+  const deleteSource=id=>{const u=sources.filter(s=>s.id!==id);setSources(u);persist(STORAGE_KEY,u);};
+  const changeType=(id,type)=>{const u=sources.map(s=>s.id===id?{...s,type}:s);setSources(u);persist(STORAGE_KEY,u);};
+
+  const sendChat=async()=>{
+    if(!input.trim()||chatBusy)return;
+    const newMsgs=[...msgs,{role:"user",content:input.trim()}];
+    setMsgs(newMsgs);setInput("");setChatBusy(true);
+    try{
+      const reply=await callClaude(buildSystem("chat"),newMsgs.map(m=>({role:m.role,content:m.content})),apiKey);
+      const final=[...newMsgs,{role:"assistant",content:reply}];
+      setMsgs(final);persist(CHAT_KEY,final);
+    }catch(e){setMsgs(p=>[...p,{role:"assistant",content:`❌ ${e.message}`}]);}
+    finally{setChatBusy(false);}
+  };
+
+  const generateExercise=async()=>{
+    setExBusy(true);setExResult(null);setShowSolution(false);
+    const prompt=`Erstelle ${exCfg.count} klausurtypische Aufgabe(n).\nThema: ${exCfg.topic||"relevantes Thema aus den Unterlagen"}\nSchwierigkeitsgrad: ${exCfg.difficulty}\nTyp: ${exCfg.type}\nNUR aus den Unterlagen. Format:\n## Aufgabe\n[Text]\n---LÖSUNG---\n## Musterlösung\n[Rechenweg]`;
+    try{const r=await callClaude(buildSystem("exercise"),[{role:"user",content:prompt}],apiKey);setExResult(r);}
+    catch(e){setExResult(`❌ ${e.message}`);}
+    finally{setExBusy(false);}
+  };
+
+  const startExam=()=>{
+    const src=sources.find(s=>s.id===examSrc);if(!src)return;
+    setExamMsgs([{role:"assistant",content:`Ich begleite dich durch **${src.name}**.\n\nStelle mir eine Aufgabe – tippe sie ab oder frage nach einem Teil. Ich erkläre Schritt für Schritt.`}]);
+    setExamStarted(true);
+  };
+
+  const sendExam=async()=>{
+    if(!examInput.trim()||examBusy)return;
+    const src=sources.find(s=>s.id===examSrc);
+    const newMsgs=[...examMsgs,{role:"user",content:examInput.trim()}];
+    setExamMsgs(newMsgs);setExamInput("");setExamBusy(true);
+    try{
+      const r=await callClaude(buildSystem("exam"),[{role:"user",content:`Altklausur "${src?.name}":`},...newMsgs.map(m=>({role:m.role,content:m.content}))].slice(-10),apiKey);
+      setExamMsgs(p=>[...p,{role:"assistant",content:r}]);
+    }catch(e){setExamMsgs(p=>[...p,{role:"assistant",content:`❌ ${e.message}`}]);}
+    finally{setExamBusy(false);}
+  };
+
+  if(!apiKey)return <ApiKeySetup onSave={saveApiKey}/>;
+
+  const exams=sources.filter(s=>s.type==="altklausur");
+  const srcCount=sources.length;
+
+  const S={
+    root:{display:"flex",height:"100vh",overflow:"hidden",fontFamily:"'DM Sans',sans-serif",background:"#0a0d14",color:"#e2e8f0"},
+    sidebar:{width:200,flexShrink:0,background:"rgba(255,255,255,0.025)",borderRight:"1px solid rgba(255,255,255,0.06)",display:"flex",flexDirection:"column",padding:"0 0 16px"},
+    logo:{display:"flex",alignItems:"center",gap:11,padding:"18px 16px",borderBottom:"1px solid rgba(255,255,255,0.06)"},
+    logoIcon:{width:36,height:36,borderRadius:9,background:"linear-gradient(135deg,#1d4ed8,#4f9cf9)",display:"flex",alignItems:"center",justifyContent:"center",fontSize:19,fontWeight:700,fontFamily:"'DM Serif Display',serif",color:"#fff",flexShrink:0},
+    nav:{flex:1,padding:"10px 8px",display:"flex",flexDirection:"column",gap:3},
+    navBtn:(a)=>({display:"flex",alignItems:"center",gap:9,padding:"8px 11px",background:a?"rgba(79,156,249,0.12)":"none",border:"none",borderRadius:8,color:a?"#7dd3fc":"#64748b",cursor:"pointer",fontSize:13,fontWeight:500,fontFamily:"inherit",width:"100%",textAlign:"left"}),
+    badge:{background:"rgba(79,156,249,0.2)",color:"#7dd3fc",borderRadius:10,padding:"1px 7px",fontSize:11,fontWeight:600},
+    main:{flex:1,display:"flex",flexDirection:"column",overflow:"hidden"},
+    page:{flex:1,overflowY:"auto",padding:"22px 26px 40px"},
+    h1:{fontFamily:"'DM Serif Display',serif",fontSize:23,color:"#f1f5f9",marginBottom:4},
+    sub:{color:"#64748b",fontSize:13},
+    pageHeader:{display:"flex",justifyContent:"space-between",alignItems:"flex-start",marginBottom:18,gap:14,flexWrap:"wrap"},
+    primaryBtn:{background:"linear-gradient(135deg,#1d4ed8,#3b82f6)",border:"none",borderRadius:8,padding:"8px 16px",color:"#fff",fontSize:13,fontWeight:600,cursor:"pointer",fontFamily:"inherit",flexShrink:0},
+    legend:{display:"flex",gap:10,flexWrap:"wrap",marginBottom:16,padding:"9px 13px",background:"rgba(255,255,255,0.03)",borderRadius:8,border:"1px solid rgba(255,255,255,0.06)"},
+    sourceGrid:{display:"grid",gridTemplateColumns:"repeat(auto-fill,minmax(270px,1fr))",gap:9},
+    sourceCard:{display:"flex",alignItems:"stretch",background:"rgba(255,255,255,0.04)",border:"1px solid rgba(255,255,255,0.08)",borderRadius:11,overflow:"hidden",animation:"fadeIn .25s ease"},
+    tipsBox:{marginTop:22,background:"rgba(79,156,249,0.04)",border:"1px solid rgba(79,156,249,0.15)",borderRadius:11,padding:"13px 16px"},
+    dashboard:{flex:1,display:"flex",flexDirection:"column",overflow:"hidden"},
+    widgetTabs:{display:"flex",borderBottom:"1px solid rgba(255,255,255,0.07)",background:"rgba(255,255,255,0.02)",flexShrink:0},
+    wTab:(a)=>({flex:1,padding:"12px 6px",background:"none",border:"none",borderBottom:a?"2px solid #3b82f6":"2px solid transparent",color:a?"#7dd3fc":"#64748b",cursor:"pointer",fontSize:12.5,fontWeight:500,fontFamily:"inherit",display:"flex",alignItems:"center",justifyContent:"center",gap:5}),
+    widgetPanel:{flex:1,display:"flex",flexDirection:"column",overflow:"hidden"},
+    widgetSplit:{flex:1,display:"flex",overflow:"hidden"},
+    msgArea:{flex:1,overflowY:"auto",padding:"16px 18px",display:"flex",flexDirection:"column",gap:11},
+    msg:(u)=>({maxWidth:"78%",alignSelf:u?"flex-end":"flex-start",animation:"fadeIn .2s ease"}),
+    bubbleU:{padding:"9px 13px",borderRadius:"13px 13px 4px 13px",fontSize:13.5,lineHeight:1.65,background:"linear-gradient(135deg,#1e3a8a,#1d4ed8)"},
+    bubbleB:{padding:"9px 13px",borderRadius:"13px 13px 13px 4px",fontSize:13.5,lineHeight:1.65,background:"rgba(255,255,255,0.05)",border:"1px solid rgba(255,255,255,0.08)"},
+    chatSide:{width:200,flexShrink:0,borderLeft:"1px solid rgba(255,255,255,0.07)",padding:"16px 13px",overflowY:"auto"},
+    sideTitle:{fontSize:9.5,color:"#4f9cf9",letterSpacing:1.5,textTransform:"uppercase",fontWeight:700,marginBottom:9},
+    quickBtn:{display:"block",width:"100%",textAlign:"left",background:"rgba(255,255,255,0.04)",border:"1px solid rgba(255,255,255,0.08)",borderRadius:7,padding:"6px 8px",color:"#94a3b8",cursor:"pointer",fontSize:11.5,marginBottom:5,lineHeight:1.4,fontFamily:"inherit"},
+    inputRow:{display:"flex",gap:8,padding:"10px 16px 13px",borderTop:"1px solid rgba(255,255,255,0.07)",flexShrink:0},
+    textarea:{flex:1,background:"rgba(255,255,255,0.05)",border:"1px solid rgba(79,156,249,0.25)",borderRadius:9,padding:"8px 11px",color:"#e2e8f0",fontSize:13.5,fontFamily:"inherit",resize:"none",outline:"none",lineHeight:1.5},
+    sendBtn:{width:40,background:"linear-gradient(135deg,#1d4ed8,#3b82f6)",border:"none",borderRadius:9,color:"#fff",fontSize:17,cursor:"pointer"},
+    exConfig:{width:225,flexShrink:0,borderRight:"1px solid rgba(255,255,255,0.07)",padding:"16px 14px",overflowY:"auto"},
+    label:{display:"block",fontSize:10,color:"#64748b",letterSpacing:.5,textTransform:"uppercase",fontWeight:600,marginBottom:5},
+    input:{width:"100%",background:"rgba(255,255,255,0.05)",border:"1px solid rgba(255,255,255,0.1)",borderRadius:7,padding:"7px 9px",color:"#e2e8f0",fontSize:13,fontFamily:"inherit",outline:"none"},
+    exResult:{flex:1,overflowY:"auto",padding:"16px 20px"},
+    exCard:{background:"rgba(255,255,255,0.04)",border:"1px solid rgba(255,255,255,0.1)",borderRadius:11,padding:"13px 15px"},
+    noSrcHint:{marginTop:9,fontSize:12,color:"#64748b",lineHeight:1.7,background:"rgba(245,158,11,0.07)",border:"1px solid rgba(245,158,11,0.2)",borderRadius:7,padding:"8px 10px"},
+    examCard:(a)=>({padding:"11px 13px",borderRadius:11,cursor:"pointer",background:a?"rgba(79,156,249,0.1)":"rgba(255,255,255,0.04)",border:a?"1px solid rgba(79,156,249,0.4)":"1px solid rgba(255,255,255,0.1)",textAlign:"center",minWidth:120}),
+  };
+
+  return(
+    <div style={S.root}>
+      <aside style={S.sidebar}>
+        <div style={S.logo}>
+          <span style={S.logoIcon}>∑</span>
+          <div>
+            <div style={{fontFamily:"'DM Serif Display',serif",fontSize:18,color:"#fff",lineHeight:1.1}}>QM3</div>
+            <div style={{fontSize:9,color:"#4f9cf9",letterSpacing:3,textTransform:"uppercase"}}>Tutor</div>
+          </div>
+        </div>
+        <nav style={S.nav}>
+          {[{id:"dashboard",icon:"⬡",label:"Dashboard"},{id:"sources",icon:"⬠",label:"Quellen",badge:srcCount}].map(item=>(
+            <button key={item.id} onClick={()=>setView(item.id)} style={S.navBtn(view===item.id)}>
+              <span style={{fontSize:14,width:17,textAlign:"center"}}>{item.icon}</span>
+              <span style={{flex:1}}>{item.label}</span>
+              {item.badge>0&&<span style={S.badge}>{item.badge}</span>}
+            </button>
+          ))}
+        </nav>
+        <div style={{padding:"12px 14px 0",borderTop:"1px solid rgba(255,255,255,0.05)"}}>
+          <div style={{display:"flex",alignItems:"center",gap:7,marginBottom:8}}>
+            <div style={{width:6,height:6,borderRadius:"50%",background:srcCount>0?"#34d399":"#475569",boxShadow:srcCount>0?"0 0 7px #34d39966":"none"}}/>
+            <span style={{fontSize:11,color:"#475569"}}>{srcCount} Quelle{srcCount!==1?"n":""}</span>
+          </div>
+          <button onClick={()=>{if(confirm("API Key entfernen und neu eingeben?")){localStorage.removeItem("qm3_apikey");setApiKey("");}}}
+            style={{fontSize:11,color:"#475569",background:"none",border:"none",cursor:"pointer",fontFamily:"inherit",padding:0}}>
+            🔑 API Key ändern
+          </button>
+        </div>
+      </aside>
+
+      <main style={S.main}>
+        {view==="sources"&&(
+          <div style={S.page}>
+            <div style={S.pageHeader}>
+              <div><h1 style={S.h1}>Kursunterlagen</h1><p style={S.sub}>PDFs hochladen – Text wird automatisch extrahiert.</p></div>
+              <button style={S.primaryBtn} onClick={()=>fileRef.current?.click()} disabled={uploading}>
+                {uploading?uploadProg:"+ Hochladen"}
+              </button>
+              <input ref={fileRef} type="file" multiple accept=".pdf,.txt,.md" style={{display:"none"}} onChange={e=>handleUpload(Array.from(e.target.files))}/>
+            </div>
+            <div style={S.legend}>
+              {SOURCE_TYPES.map(t=>(
+                <div key={t.value} style={{display:"flex",alignItems:"center",gap:5,fontSize:12,color:"#94a3b8"}}>
+                  <span style={{width:7,height:7,borderRadius:"50%",background:t.color,display:"inline-block"}}/>
+                  {t.icon} {t.label}
+                </div>
+              ))}
+            </div>
+            {sources.length===0?(
+              <div style={{textAlign:"center",padding:"48px 20px",border:"2px dashed rgba(255,255,255,0.08)",borderRadius:14,display:"flex",flexDirection:"column",alignItems:"center",gap:10}}>
+                <div style={{fontSize:42}}>📂</div>
+                <div style={{fontSize:15,fontWeight:600,color:"#94a3b8"}}>Noch keine Unterlagen</div>
+                <div style={{fontSize:13,color:"#475569",maxWidth:340}}>Lade PDFs, Skripte oder Klausuren hoch.</div>
+                <button style={S.primaryBtn} onClick={()=>fileRef.current?.click()}>Erste Datei hochladen</button>
+              </div>
+            ):(
+              <div style={S.sourceGrid}>
+                {sources.map(s=>{
+                  const t=SOURCE_TYPES.find(x=>x.value===s.type);
+                  return(
+                    <div key={s.id} style={S.sourceCard}>
+                      <div style={{width:4,background:t?.color||"#94a3b8",flexShrink:0}}/>
+                      <div style={{flex:1,padding:"10px 11px",minWidth:0}}>
+                        <div style={{fontSize:13,fontWeight:600,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap",marginBottom:3}}>{s.name}</div>
+                        <div style={{fontSize:11,color:"#64748b",marginBottom:6,display:"flex",flexWrap:"wrap",gap:5,alignItems:"center"}}>
+                          {(s.size/1024).toFixed(0)} KB · {s.added}
+                          {s.text?<span style={{color:"#34d399",background:"rgba(52,211,153,0.1)",borderRadius:4,padding:"1px 5px"}}>✓ {s.text.length.toLocaleString()} Z.</span>
+                          :<span style={{color:"#f59e0b",background:"rgba(245,158,11,0.1)",borderRadius:4,padding:"1px 5px"}}>⚠ Kein Text</span>}
+                        </div>
+                        <select value={s.type} onChange={e=>changeType(s.id,e.target.value)} style={{background:"rgba(255,255,255,0.06)",border:"1px solid rgba(255,255,255,0.1)",borderRadius:6,padding:"3px 6px",color:"#cbd5e1",fontSize:12,fontFamily:"inherit",cursor:"pointer"}}>
+                          {SOURCE_TYPES.map(t=><option key={t.value} value={t.value}>{t.icon} {t.label}</option>)}
+                        </select>
+                      </div>
+                      <button onClick={()=>deleteSource(s.id)} style={{padding:"0 11px",background:"none",border:"none",color:"#475569",cursor:"pointer",fontSize:13}}>✕</button>
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+            <div style={S.tipsBox}>
+              <div style={{fontSize:12,fontWeight:700,color:"#7dd3fc",marginBottom:7}}>💡 Hinweise</div>
+              <div style={{fontSize:12,color:"#64748b",lineHeight:1.8,display:"flex",flexDirection:"column",gap:2}}>
+                <div>• PDF-Text wird automatisch extrahiert</div>
+                <div>• Typ zuweisen hilft dem Tutor (Skript vs. Klausur)</div>
+                <div>• Neue Unterlagen jederzeit nachladen</div>
+                <div>• Alles bleibt lokal in deinem Browser gespeichert</div>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {view==="dashboard"&&(
+          <div style={S.dashboard}>
+            <div style={S.widgetTabs}>
+              {[{id:"chat",icon:"💬",label:"Chat"},{id:"exercise",icon:"🧮",label:"Übungsaufgaben"},{id:"exam",icon:"📝",label:"Altklausuren"}].map(w=>(
+                <button key={w.id} onClick={()=>setActiveWidget(w.id)} style={S.wTab(activeWidget===w.id)}>
+                  <span>{w.icon}</span>{w.label}
+                </button>
+              ))}
+            </div>
+
+            {activeWidget==="chat"&&(
+              <div style={S.widgetPanel}>
+                <div style={S.widgetSplit}>
+                  <div style={S.msgArea}>
+                    {msgs.map((m,i)=>(
+                      <div key={i} style={S.msg(m.role==="user")}>
+                        {m.role==="assistant"&&<div style={{fontSize:9,color:"#4f9cf9",letterSpacing:1,textTransform:"uppercase",fontWeight:700,marginBottom:4}}>🎓 Tutor</div>}
+                        <div dangerouslySetInnerHTML={{__html:md(m.content)}} style={m.role==="user"?S.bubbleU:S.bubbleB}/>
+                      </div>
+                    ))}
+                    {chatBusy&&<TypingDots/>}
+                    <div ref={chatEnd}/>
+                  </div>
+                  <div style={S.chatSide}>
+                    <div style={S.sideTitle}>Schnelleinstieg</div>
+                    {["Zentrales Thema aus dem Skript erklären","Klausurrelevante Formeln","Wichtigste Konzepte zusammenfassen","Typische Fehlerquellen"].map(q=>(
+                      <button key={q} onClick={()=>setInput(q)} style={S.quickBtn}>{q}</button>
+                    ))}
+                    {srcCount===0&&<div style={S.noSrcHint}>⚠ Keine Quellen.<br/><span style={{cursor:"pointer",textDecoration:"underline"}} onClick={()=>setView("sources")}>Jetzt hochladen →</span></div>}
+                  </div>
+                </div>
+                <div style={S.inputRow}>
+                  <textarea value={input} rows={2} onChange={e=>setInput(e.target.value)}
+                    onKeyDown={e=>{if(e.key==="Enter"&&!e.shiftKey){e.preventDefault();sendChat();}}}
+                    placeholder="Frage stellen… (Enter senden)" style={S.textarea}/>
+                  <button onClick={sendChat} disabled={chatBusy||!input.trim()} style={S.sendBtn}>↑</button>
+                </div>
+              </div>
+            )}
+
+            {activeWidget==="exercise"&&(
+              <div style={S.widgetPanel}>
+                <div style={S.widgetSplit}>
+                  <div style={S.exConfig}>
+                    <div style={S.sideTitle}>Konfigurieren</div>
+                    <div style={{marginBottom:11}}>
+                      <label style={S.label}>Thema</label>
+                      <input value={exCfg.topic} onChange={e=>setExCfg(c=>({...c,topic:e.target.value}))} placeholder="z.B. t-Test, Regression…" style={S.input}/>
+                    </div>
+                    <div style={{marginBottom:11}}>
+                      <label style={S.label}>Schwierigkeit</label>
+                      <div style={{display:"flex",gap:4}}>
+                        {["leicht","mittel","schwer"].map(d=>(
+                          <button key={d} onClick={()=>setExCfg(c=>({...c,difficulty:d}))}
+                            style={{flex:1,padding:"5px 2px",border:"1px solid",borderRadius:6,cursor:"pointer",fontSize:11,fontFamily:"inherit",fontWeight:500,textTransform:"capitalize",
+                              background:exCfg.difficulty===d?DIFF_COLORS[d]+"33":"transparent",
+                              borderColor:exCfg.difficulty===d?DIFF_COLORS[d]:"rgba(255,255,255,0.1)",
+                              color:exCfg.difficulty===d?DIFF_COLORS[d]:"#888"}}>
+                            {d}
+                          </button>
+                        ))}
+                      </div>
+                    </div>
+                    <div style={{marginBottom:11}}>
+                      <label style={S.label}>Typ</label>
+                      <select value={exCfg.type} onChange={e=>setExCfg(c=>({...c,type:e.target.value}))} style={S.input}>
+                        <option value="rechenaufgabe">Rechenaufgabe</option>
+                        <option value="verstaendnis">Verständnisfrage</option>
+                        <option value="multiple_choice">Multiple Choice</option>
+                        <option value="herleitung">Herleitung</option>
+                        <option value="interpretation">Interpretation</option>
+                      </select>
+                    </div>
+                    <div style={{marginBottom:13}}>
+                      <label style={S.label}>Anzahl</label>
+                      <select value={exCfg.count} onChange={e=>setExCfg(c=>({...c,count:Number(e.target.value)}))} style={S.input}>
+                        {[1,2,3,5].map(n=><option key={n} value={n}>{n}</option>)}
+                      </select>
+                    </div>
+                    <button onClick={generateExercise} disabled={exBusy||srcCount===0} style={{...S.primaryBtn,width:"100%"}}>
+                      {exBusy?"⏳ Generiere…":"✨ Generieren"}
+                    </button>
+                    {srcCount===0&&<div style={S.noSrcHint}>Zuerst Quellen hochladen</div>}
+                  </div>
+                  <div style={S.exResult}>
+                    {!exResult&&!exBusy&&<div style={{height:"100%",display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center",color:"#475569"}}><div style={{fontSize:34}}>🧮</div><div style={{marginTop:9,fontSize:13}}>Aufgabe konfigurieren und generieren</div></div>}
+                    {exBusy&&<div style={{height:"100%",display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center"}}><TypingDots/><div style={{color:"#666",marginTop:9,fontSize:13}}>Generiere aus deinen Unterlagen…</div></div>}
+                    {exResult&&!exBusy&&(()=>{
+                      const parts=exResult.split("---LÖSUNG---");
+                      const aufgabe=parts[0]||exResult,loesung=parts[1]||"";
+                      return(
+                        <div>
+                          <div style={S.exCard}>
+                            <div style={{fontSize:9,letterSpacing:1.5,textTransform:"uppercase",fontWeight:700,color:"#4f9cf9",marginBottom:8}}>Aufgabe</div>
+                            <div dangerouslySetInnerHTML={{__html:md(aufgabe.trim())}} style={{fontSize:13.5,lineHeight:1.65}}/>
+                          </div>
+                          {loesung&&<div style={{marginTop:9}}>
+                            <button onClick={()=>setShowSolution(s=>!s)} style={{background:"rgba(255,255,255,0.05)",border:"1px solid rgba(255,255,255,0.12)",borderRadius:7,padding:"6px 12px",color:"#94a3b8",cursor:"pointer",fontSize:13,fontFamily:"inherit"}}>
+                              {showSolution?"🙈 Lösung verbergen":"👁 Musterlösung"}
+                            </button>
+                            {showSolution&&<div style={{...S.exCard,borderColor:"rgba(52,211,153,0.3)",marginTop:7}}>
+                              <div style={{fontSize:9,letterSpacing:1.5,textTransform:"uppercase",fontWeight:700,color:"#34d399",marginBottom:8}}>Musterlösung</div>
+                              <div dangerouslySetInnerHTML={{__html:md(loesung.trim())}} style={{fontSize:13.5,lineHeight:1.65}}/>
+                            </div>}
+                          </div>}
+                          <button onClick={()=>{setInput(`Aufgabe besprechen:\n${aufgabe.slice(0,200)}`);setActiveWidget("chat");}}
+                            style={{background:"rgba(255,255,255,0.05)",border:"1px solid rgba(255,255,255,0.12)",borderRadius:7,padding:"6px 12px",color:"#94a3b8",cursor:"pointer",fontSize:13,fontFamily:"inherit",marginTop:7}}>
+                            💬 Im Chat besprechen →
+                          </button>
+                        </div>
+                      );
+                    })()}
+                  </div>
+                </div>
+              </div>
+            )}
+
+            {activeWidget==="exam"&&(
+              <div style={S.widgetPanel}>
+                {!examStarted?(
+                  <div style={{padding:"22px 26px",maxWidth:540}}>
+                    <div style={S.sideTitle}>Altklausur auswählen</div>
+                    {exams.length===0?(
+                      <div style={S.noSrcHint}>Keine Altklausuren. PDFs hochladen und Typ „Altklausur" zuweisen.<br/><span style={{cursor:"pointer",textDecoration:"underline"}} onClick={()=>setView("sources")}>Zu den Quellen →</span></div>
+                    ):(
+                      <>
+                        <div style={{display:"flex",gap:9,flexWrap:"wrap",marginTop:9}}>
+                          {exams.map(s=>(
+                            <div key={s.id} onClick={()=>setExamSrc(s.id)} style={S.examCard(examSrc===s.id)}>
+                              <div style={{fontSize:20}}>📝</div>
+                              <div style={{fontSize:12,fontWeight:600,marginTop:5}}>{s.name}</div>
+                              <div style={{fontSize:10,color:"#666",marginTop:2}}>{s.added}</div>
+                            </div>
+                          ))}
+                        </div>
+                        <button onClick={startExam} disabled={!examSrc} style={{...S.primaryBtn,marginTop:16}}>Klausur durcharbeiten →</button>
+                      </>
+                    )}
+                  </div>
+                ):(
+                  <div style={S.widgetSplit}>
+                    <div style={S.msgArea}>
+                      {examMsgs.map((m,i)=>(
+                        <div key={i} style={S.msg(m.role==="user")}>
+                          {m.role==="assistant"&&<div style={{fontSize:9,color:"#4f9cf9",letterSpacing:1,textTransform:"uppercase",fontWeight:700,marginBottom:4}}>🎓 Tutor</div>}
+                          <div dangerouslySetInnerHTML={{__html:md(m.content)}} style={m.role==="user"?S.bubbleU:S.bubbleB}/>
+                        </div>
+                      ))}
+                      {examBusy&&<TypingDots/>}
+                      <div ref={examEnd}/>
+                    </div>
+                    <div style={S.chatSide}>
+                      <div style={S.sideTitle}>{sources.find(s=>s.id===examSrc)?.name}</div>
+                      <button onClick={()=>{setExamStarted(false);setExamMsgs([]);setExamSrc(null);}} style={S.quickBtn}>← Andere Klausur</button>
+                      <div style={{marginTop:12,fontSize:11,color:"#555",lineHeight:1.7}}>Tippe eine Aufgabe ab oder beschreibe womit du nicht weiterkommst.</div>
+                    </div>
+                  </div>
+                )}
+                {examStarted&&(
+                  <div style={S.inputRow}>
+                    <textarea value={examInput} rows={2} onChange={e=>setExamInput(e.target.value)}
+                      onKeyDown={e=>{if(e.key==="Enter"&&!e.shiftKey){e.preventDefault();sendExam();}}}
+                      placeholder="Aufgabe eingeben…" style={S.textarea}/>
+                    <button onClick={sendExam} disabled={examBusy||!examInput.trim()} style={S.sendBtn}>↑</button>
+                  </div>
+                )}
+              </div>
+            )}
+          </div>
+        )}
+      </main>
+    </div>
+  );
+}
+
+ReactDOM.createRoot(document.getElementById("root")).render(<App/>);
+</script>
+</body>
+</html>
