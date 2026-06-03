@@ -6,6 +6,7 @@
 <title>QM3 Tutor</title>
 <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/KaTeX/0.16.9/katex.min.css">
 <script src="https://cdnjs.cloudflare.com/ajax/libs/KaTeX/0.16.9/katex.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/KaTeX/0.16.9/contrib/auto-render.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
 <script crossorigin src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
 <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
@@ -81,24 +82,7 @@ async function callClaude(system,messages){
 }
 
 function md(text=""){
-  // 1. Extract math blocks to protect from markdown processing
-  const mathBlocks=[];
-  // Display math $$...$$
-  text=text.replace(/\$\$([\s\S]+?)\$\$/g,(match,math)=>{
-    const idx=mathBlocks.length;
-    try{ mathBlocks.push('<div style="overflow-x:auto;margin:6px 0">'+katex.renderToString(math.trim(),{displayMode:true,throwOnError:false})+'</div>'); }
-    catch(){ mathBlocks.push(match); }
-    return `%%MATH${idx}%%`;
-  });
-  // Inline math $...$
-  text=text.replace(/\$([^$\n]+?)\$/g,(match,math)=>{
-    const idx=mathBlocks.length;
-    try{ mathBlocks.push(katex.renderToString(math.trim(),{displayMode:false,throwOnError:false})); }
-    catch(){ mathBlocks.push(match); }
-    return `%%MATH${idx}%%`;
-  });
-  // 2. Standard markdown
-  text=text
+  return text
     .replace(/\*\*(.+?)\*\*/g,"<strong>$1</strong>")
     .replace(/\*(.+?)\*/g,"<em>$1</em>")
     .replace(/`([^`\n]+)`/g,"<code>$1</code>")
@@ -110,9 +94,6 @@ function md(text=""){
     .replace(/^(\d+)\. (.+)$/gm,'<li class="ol">$2</li>')
     .replace(/\n{2,}/g,'</p><p class="mp">')
     .replace(/\n/g,"<br/>");
-  // 3. Restore math
-  mathBlocks.forEach((b,i)=>{ text=text.split(`%%MATH${i}%%`).join(b); });
-  return text;
 }
 
 
@@ -155,6 +136,23 @@ function App(){
 
   useEffect(()=>{chatEnd.current?.scrollIntoView({behavior:"smooth"});},[msgs,chatBusy]);
   useEffect(()=>{examEnd.current?.scrollIntoView({behavior:"smooth"});},[examMsgs,examBusy]);
+
+  // Auto-render math after any content update
+  useEffect(()=>{
+    if(typeof renderMathInElement==="undefined") return;
+    try{
+      renderMathInElement(document.body,{
+        delimiters:[
+          {left:"$$",right:"$$",display:true},
+          {left:"\\[",right:"\\]",display:true},
+          {left:"$",right:"$",display:false},
+          {left:"\\(",right:"\\)",display:false},
+        ],
+        throwOnError:false,
+        ignoredTags:["script","noscript","style","textarea","pre","code","input","select"],
+      });
+    }catch(e){}
+  },[msgs,exResult,examMsgs,showSolution,chatBusy,exBusy,examBusy]);
 
   const buildSystem=useCallback((mode="chat")=>{
     if(!sources.length)return SYSTEM_BASE;
