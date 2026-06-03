@@ -4,6 +4,8 @@
 <meta charset="UTF-8"/>
 <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
 <title>QM3 Tutor</title>
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/KaTeX/0.16.9/katex.min.css">
+<script src="https://cdnjs.cloudflare.com/ajax/libs/KaTeX/0.16.9/katex.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
 <script crossorigin src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
 <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
@@ -79,7 +81,24 @@ async function callClaude(system,messages){
 }
 
 function md(text=""){
-  return text
+  // 1. Extract math blocks to protect from markdown processing
+  const mathBlocks=[];
+  // Display math $$...$$
+  text=text.replace(/\$\$([\s\S]+?)\$\$/g,(match,math)=>{
+    const idx=mathBlocks.length;
+    try{ mathBlocks.push('<div style="overflow-x:auto;margin:6px 0">'+katex.renderToString(math.trim(),{displayMode:true,throwOnError:false})+'</div>'); }
+    catch(){ mathBlocks.push(match); }
+    return `%%MATH${idx}%%`;
+  });
+  // Inline math $...$
+  text=text.replace(/\$([^$\n]+?)\$/g,(match,math)=>{
+    const idx=mathBlocks.length;
+    try{ mathBlocks.push(katex.renderToString(math.trim(),{displayMode:false,throwOnError:false})); }
+    catch(){ mathBlocks.push(match); }
+    return `%%MATH${idx}%%`;
+  });
+  // 2. Standard markdown
+  text=text
     .replace(/\*\*(.+?)\*\*/g,"<strong>$1</strong>")
     .replace(/\*(.+?)\*/g,"<em>$1</em>")
     .replace(/`([^`\n]+)`/g,"<code>$1</code>")
@@ -91,6 +110,9 @@ function md(text=""){
     .replace(/^(\d+)\. (.+)$/gm,'<li class="ol">$2</li>')
     .replace(/\n{2,}/g,'</p><p class="mp">')
     .replace(/\n/g,"<br/>");
+  // 3. Restore math
+  mathBlocks.forEach((b,i)=>{ text=text.split(`%%MATH${i}%%`).join(b); });
+  return text;
 }
 
 
@@ -397,13 +419,13 @@ Format:
                     <div style={S.sideTitle}>Konfigurieren</div>
                     <div style={{marginBottom:11}}>
                       <label style={S.label}>Thema</label>
-                      <input value={exCfg.topic} onChange={e=>setExCfg(c=>({...c,topic:e.target.value}))} placeholder="z.B. t-Test, Regression…" style={S.input}/>
+                      <input value={exCfg.topic} onChange={e=>{setExCfg(c=>({...c,topic:e.target.value}));setExResult(null);}} placeholder="z.B. t-Test, Regression…" style={S.input}/>
                     </div>
                     <div style={{marginBottom:11}}>
                       <label style={S.label}>Schwierigkeit</label>
                       <div style={{display:"flex",gap:4}}>
                         {["leicht","mittel","schwer"].map(d=>(
-                          <button key={d} onClick={()=>setExCfg(c=>({...c,difficulty:d}))}
+                          <button key={d} onClick={()=>{setExCfg(c=>({...c,difficulty:d}));setExResult(null);setShowSolution(false);}}
                             style={{flex:1,padding:"5px 2px",border:"1px solid",borderRadius:6,cursor:"pointer",fontSize:11,fontFamily:"inherit",fontWeight:500,textTransform:"capitalize",
                               background:exCfg.difficulty===d?DIFF_COLORS[d]+"33":"transparent",
                               borderColor:exCfg.difficulty===d?DIFF_COLORS[d]:"rgba(255,255,255,0.1)",
