@@ -50,7 +50,7 @@ async function extractPdfText(file){
   return txt.trim();
 }
 
-const STORAGE_KEY="qm3v2_sources",CHAT_KEY="qm3v2_chat";
+const STORAGE_KEY="qm3v2_sources",CHAT_KEY="qm3v2_chat",EX_KEY="qm3v2_exercise";
 const SOURCE_TYPES=[
   {value:"skript",label:"Skript",icon:"📘",color:"#4f9cf9"},
   {value:"uebung",label:"Übungsaufgaben",icon:"✏️",color:"#a78bfa"},
@@ -107,8 +107,8 @@ function TypingDots(){
 
 function App(){
   const [sources,setSources]=useState([]);
-  const [view,setView]=useState("dashboard");
-  const [activeWidget,setActiveWidget]=useState("chat");
+  const [view,setView]=useState(()=>hydrate("qm3v2_view")||"dashboard");
+  const [activeWidget,setActiveWidget]=useState(()=>hydrate("qm3v2_widget")||"chat");
   const [msgs,setMsgs]=useState([]);
   const [input,setInput]=useState("");
   const [chatBusy,setChatBusy]=useState(false);
@@ -128,16 +128,26 @@ function App(){
   const examEnd=useRef(null);
 
   useEffect(()=>{
-    const s=hydrate(STORAGE_KEY),c=hydrate(CHAT_KEY);
+    const s=hydrate(STORAGE_KEY),c=hydrate(CHAT_KEY),ex=hydrate(EX_KEY);
     if(s)setSources(s);
     if(c)setMsgs(c);
     else setMsgs([{role:"assistant",content:"Willkommen bei deinem **QM3-Tutor**! 🎓\n\nLade zuerst deine Unterlagen über **Quellen** hoch. Ich arbeite ausschließlich mit deinen Materialien – kein externes Wissen.\n\nSobald Quellen geladen sind:\n- **Konzepte** erklären lassen\n- **Übungsaufgaben** generieren\n- **Altklausuren** durcharbeiten"}]);
+    if(ex){
+      if(ex.result)setExResult(ex.result);
+      if(ex.cfg)setExCfg(ex.cfg);
+    }
   },[]);
 
   useEffect(()=>{chatEnd.current?.scrollIntoView({behavior:"smooth"});},[msgs,chatBusy]);
   useEffect(()=>{examEnd.current?.scrollIntoView({behavior:"smooth"});},[examMsgs,examBusy]);
 
-  // Auto-render math after any content update
+  useEffect(()=>{persist("qm3v2_view",view);},[view]);
+  useEffect(()=>{persist("qm3v2_widget",activeWidget);},[activeWidget]);
+
+  // Persist exercise result + config
+  useEffect(()=>{
+    persist(EX_KEY,{result:exResult,cfg:exCfg});
+  },[exResult,exCfg]);
   useEffect(()=>{
     if(typeof renderMathInElement==="undefined") return;
     try{
