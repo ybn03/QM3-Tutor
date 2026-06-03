@@ -61,7 +61,8 @@ STRIKTE REGEL: Du antwortest AUSSCHLIESSLICH auf Basis der hochgeladenen Kursunt
 Erfinde KEINE zusätzlichen Inhalte, Themen oder Erklärungen, die nicht in den Quellen stehen.
 Wenn etwas nicht in den Quellen steht, sage klar: "Dazu finde ich in deinen Unterlagen keine Information."
 Antworte immer auf Deutsch. Formatiere Formeln und Rechenwege klar und strukturiert.
-Verweise bei Erklärungen explizit auf die jeweilige Quelle (z.B. "Laut Skript Seite X...").`;
+Verweise bei Erklärungen explizit auf die jeweilige Quelle (z.B. "Laut Skript Seite X...").
+AUFGABEN ERSTELLEN: Wenn du Übungsaufgaben erstellst, erstelle IMMER vollständig neue, originale Aufgaben mit neuen Zahlen, neuen Kontexten und neuen Szenarien. Kopiere NIEMALS Aufgaben aus den Quellen. Orientiere dich nur am Stil, Format und Schwierigkeitsgrad der Quellen, aber alle Inhalte müssen neu und selbst erdacht sein.`;
 
 const persist=(k,v)=>{try{localStorage.setItem(k,JSON.stringify(v));}catch{}};
 const hydrate=k=>{try{const s=localStorage.getItem(k);return s?JSON.parse(s):null;}catch{return null;}};
@@ -176,7 +177,23 @@ function App(){
 
   const generateExercise=async()=>{
     setExBusy(true);setExResult(null);setShowSolution(false);
-    const prompt=`Erstelle ${exCfg.count} klausurtypische Aufgabe(n).\nThema: ${exCfg.topic||"relevantes Thema aus den Unterlagen"}\nSchwierigkeitsgrad: ${exCfg.difficulty}\nTyp: ${exCfg.type}\nNUR aus den Unterlagen. Format:\n## Aufgabe\n[Text]\n---LÖSUNG---\n## Musterlösung\n[Rechenweg]`;
+    const prompt=`Erstelle ${exCfg.count} NEUE, ORIGINALE klausurtypische Aufgabe(n) für QM3.
+Thema: ${exCfg.topic||"relevantes Thema aus den Unterlagen"}
+Schwierigkeitsgrad: ${exCfg.difficulty}
+Typ: ${exCfg.type}
+
+WICHTIG: 
+- Erstelle vollständig NEUE Aufgaben mit neuen Zahlen, neuen Szenarien und neuen Kontexten.
+- Kopiere KEINE Aufgaben aus den Unterlagen – auch nicht teilweise.
+- Orientiere dich NUR am Stil, Format und Schwierigkeitsgrad der Klausuraufgaben.
+- Die Aufgaben sollen sich thematisch auf die Inhalte der Unterlagen beziehen, aber inhaltlich neu sein.
+
+Format:
+## Aufgabe
+[Neuer, originaler Aufgabentext]
+---LÖSUNG---
+## Musterlösung
+[Vollständiger Rechenweg]`;
     try{const r=await callClaude(buildSystem("exercise"),[{role:"user",content:prompt}]);setExResult(r);}
     catch(e){setExResult(`❌ ${e.message}`);}
     finally{setExBusy(false);}
