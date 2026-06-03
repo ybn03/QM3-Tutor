@@ -66,15 +66,15 @@ Verweise bei Erklärungen explizit auf die jeweilige Quelle (z.B. "Laut Skript S
 const persist=(k,v)=>{try{localStorage.setItem(k,JSON.stringify(v));}catch{}};
 const hydrate=k=>{try{const s=localStorage.getItem(k);return s?JSON.parse(s):null;}catch{return null;}};
 
-async function callClaude(system,messages,apiKey){
-  const res=await fetch("https://api.anthropic.com/v1/messages",{
+async function callClaude(system,messages){
+  const res=await fetch("/api/chat",{
     method:"POST",
-    headers:{"Content-Type":"application/json","x-api-key":apiKey,"anthropic-version":"2023-06-01"},
-    body:JSON.stringify({model:"claude-sonnet-4-20250514",max_tokens:2048,system,messages}),
+    headers:{"Content-Type":"application/json"},
+    body:JSON.stringify({system,messages}),
   });
   const d=await res.json();
-  if(d.error)throw new Error(d.error.message);
-  return d.content.map(b=>b.text||"").join("\n");
+  if(d.error)throw new Error(d.error);
+  return d.content;
 }
 
 function md(text=""){
@@ -92,33 +92,6 @@ function md(text=""){
     .replace(/\n/g,"<br/>");
 }
 
-function ApiKeySetup({onSave}){
-  const [val,setVal]=useState("");
-  return(
-    <div style={{minHeight:"100vh",background:"#0a0d14",display:"flex",alignItems:"center",justifyContent:"center",fontFamily:"'DM Sans',sans-serif"}}>
-      <div style={{background:"rgba(255,255,255,0.05)",border:"1px solid rgba(79,156,249,0.3)",borderRadius:20,padding:"40px 36px",maxWidth:440,width:"90%"}}>
-        <div style={{fontSize:44,textAlign:"center",marginBottom:16}}>🎓</div>
-        <h1 style={{fontFamily:"'DM Serif Display',serif",fontSize:26,color:"#f1f5f9",textAlign:"center",marginBottom:8}}>QM3 Tutor</h1>
-        <p style={{color:"#64748b",fontSize:13,textAlign:"center",marginBottom:28,lineHeight:1.7}}>
-          Gib deinen Anthropic API Key ein.<br/>Er wird nur lokal in deinem Browser gespeichert – nirgendwo sonst.
-        </p>
-        <label style={{fontSize:11,color:"#64748b",letterSpacing:.5,textTransform:"uppercase",fontWeight:600,display:"block",marginBottom:6}}>Anthropic API Key</label>
-        <input type="password" value={val} onChange={e=>setVal(e.target.value)}
-          onKeyDown={e=>e.key==="Enter"&&val.startsWith("sk-")&&onSave(val)}
-          placeholder="sk-ant-..."
-          style={{width:"100%",background:"rgba(255,255,255,0.06)",border:"1px solid rgba(79,156,249,0.3)",borderRadius:8,padding:"10px 12px",color:"#e2e8f0",fontSize:14,fontFamily:"inherit",outline:"none",marginBottom:16}}/>
-        <button onClick={()=>val.startsWith("sk-")&&onSave(val)}
-          style={{width:"100%",background:"linear-gradient(135deg,#1d4ed8,#3b82f6)",border:"none",borderRadius:8,padding:"11px",color:"#fff",fontSize:14,fontWeight:600,cursor:"pointer",fontFamily:"inherit"}}>
-          Speichern &amp; Starten →
-        </button>
-        <p style={{marginTop:18,fontSize:11,color:"#475569",textAlign:"center",lineHeight:1.7}}>
-          Key holen: <a href="https://console.anthropic.com" target="_blank" style={{color:"#4f9cf9"}}>console.anthropic.com</a><br/>
-          → API Keys → Create Key
-        </p>
-      </div>
-    </div>
-  );
-}
 
 function TypingDots(){
   return(
@@ -129,7 +102,6 @@ function TypingDots(){
 }
 
 function App(){
-  const [apiKey,setApiKey]=useState(()=>localStorage.getItem("qm3_apikey")||"");
   const [sources,setSources]=useState([]);
   const [view,setView]=useState("dashboard");
   const [activeWidget,setActiveWidget]=useState("chat");
@@ -160,8 +132,6 @@ function App(){
 
   useEffect(()=>{chatEnd.current?.scrollIntoView({behavior:"smooth"});},[msgs,chatBusy]);
   useEffect(()=>{examEnd.current?.scrollIntoView({behavior:"smooth"});},[examMsgs,examBusy]);
-
-  const saveApiKey=k=>{localStorage.setItem("qm3_apikey",k);setApiKey(k);};
 
   const buildSystem=useCallback((mode="chat")=>{
     if(!sources.length)return SYSTEM_BASE;
@@ -197,7 +167,7 @@ function App(){
     const newMsgs=[...msgs,{role:"user",content:input.trim()}];
     setMsgs(newMsgs);setInput("");setChatBusy(true);
     try{
-      const reply=await callClaude(buildSystem("chat"),newMsgs.map(m=>({role:m.role,content:m.content})),apiKey);
+      const reply=await callClaude(buildSystem("chat"),newMsgs.map(m=>({role:m.role,content:m.content})));
       const final=[...newMsgs,{role:"assistant",content:reply}];
       setMsgs(final);persist(CHAT_KEY,final);
     }catch(e){setMsgs(p=>[...p,{role:"assistant",content:`❌ ${e.message}`}]);}
@@ -207,7 +177,7 @@ function App(){
   const generateExercise=async()=>{
     setExBusy(true);setExResult(null);setShowSolution(false);
     const prompt=`Erstelle ${exCfg.count} klausurtypische Aufgabe(n).\nThema: ${exCfg.topic||"relevantes Thema aus den Unterlagen"}\nSchwierigkeitsgrad: ${exCfg.difficulty}\nTyp: ${exCfg.type}\nNUR aus den Unterlagen. Format:\n## Aufgabe\n[Text]\n---LÖSUNG---\n## Musterlösung\n[Rechenweg]`;
-    try{const r=await callClaude(buildSystem("exercise"),[{role:"user",content:prompt}],apiKey);setExResult(r);}
+    try{const r=await callClaude(buildSystem("exercise"),[{role:"user",content:prompt}]);setExResult(r);}
     catch(e){setExResult(`❌ ${e.message}`);}
     finally{setExBusy(false);}
   };
@@ -224,13 +194,11 @@ function App(){
     const newMsgs=[...examMsgs,{role:"user",content:examInput.trim()}];
     setExamMsgs(newMsgs);setExamInput("");setExamBusy(true);
     try{
-      const r=await callClaude(buildSystem("exam"),[{role:"user",content:`Altklausur "${src?.name}":`},...newMsgs.map(m=>({role:m.role,content:m.content}))].slice(-10),apiKey);
+      const r=await callClaude(buildSystem("exam"),[{role:"user",content:`Altklausur "${src?.name}":`},...newMsgs.map(m=>({role:m.role,content:m.content}))].slice(-10));
       setExamMsgs(p=>[...p,{role:"assistant",content:r}]);
     }catch(e){setExamMsgs(p=>[...p,{role:"assistant",content:`❌ ${e.message}`}]);}
     finally{setExamBusy(false);}
   };
-
-  if(!apiKey)return <ApiKeySetup onSave={saveApiKey}/>;
 
   const exams=sources.filter(s=>s.type==="altklausur");
   const srcCount=sources.length;
@@ -301,10 +269,6 @@ function App(){
             <div style={{width:6,height:6,borderRadius:"50%",background:srcCount>0?"#34d399":"#475569",boxShadow:srcCount>0?"0 0 7px #34d39966":"none"}}/>
             <span style={{fontSize:11,color:"#475569"}}>{srcCount} Quelle{srcCount!==1?"n":""}</span>
           </div>
-          <button onClick={()=>{if(confirm("API Key entfernen und neu eingeben?")){localStorage.removeItem("qm3_apikey");setApiKey("");}}}
-            style={{fontSize:11,color:"#475569",background:"none",border:"none",cursor:"pointer",fontFamily:"inherit",padding:0}}>
-            🔑 API Key ändern
-          </button>
         </div>
       </aside>
 
