@@ -112,10 +112,10 @@ function App(){
   const [msgs,setMsgs]=useState([]);
   const [input,setInput]=useState("");
   const [chatBusy,setChatBusy]=useState(false);
-  const [exCfg,setExCfg]=useState({topic:"",difficulty:"mittel",type:"rechenaufgabe",count:1});
-  const [exResult,setExResult]=useState(null);
+  const [exCfg,setExCfg]=useState(()=>{ const s=hydrate(EX_KEY); return s?.cfg||{topic:"",difficulty:"mittel",type:"rechenaufgabe",count:1}; });
+  const [exResult,setExResult]=useState(()=>{ const s=hydrate(EX_KEY); return s?.result||null; });
   const [exBusy,setExBusy]=useState(false);
-  const [showSolution,setShowSolution]=useState(false);
+  const [showSolution,setShowSolution]=useState(()=>{ const s=hydrate(EX_KEY); return s?.showSolution||false; });
   const [examSrc,setExamSrc]=useState(null);
   const [examMsgs,setExamMsgs]=useState([]);
   const [examInput,setExamInput]=useState("");
@@ -128,14 +128,10 @@ function App(){
   const examEnd=useRef(null);
 
   useEffect(()=>{
-    const s=hydrate(STORAGE_KEY),c=hydrate(CHAT_KEY),ex=hydrate(EX_KEY);
+    const s=hydrate(STORAGE_KEY),c=hydrate(CHAT_KEY);
     if(s)setSources(s);
     if(c)setMsgs(c);
     else setMsgs([{role:"assistant",content:"Willkommen bei deinem **QM3-Tutor**! 🎓\n\nLade zuerst deine Unterlagen über **Quellen** hoch. Ich arbeite ausschließlich mit deinen Materialien – kein externes Wissen.\n\nSobald Quellen geladen sind:\n- **Konzepte** erklären lassen\n- **Übungsaufgaben** generieren\n- **Altklausuren** durcharbeiten"}]);
-    if(ex){
-      if(ex.result)setExResult(ex.result);
-      if(ex.cfg)setExCfg(ex.cfg);
-    }
   },[]);
 
   useEffect(()=>{chatEnd.current?.scrollIntoView({behavior:"smooth"});},[msgs,chatBusy]);
@@ -146,8 +142,8 @@ function App(){
 
   // Persist exercise result + config
   useEffect(()=>{
-    persist(EX_KEY,{result:exResult,cfg:exCfg});
-  },[exResult,exCfg]);
+    persist(EX_KEY,{result:exResult,cfg:exCfg,showSolution});
+  },[exResult,exCfg,showSolution]);
   useEffect(()=>{
     if(typeof renderMathInElement==="undefined") return;
     try{
